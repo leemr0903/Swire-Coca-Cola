@@ -23,10 +23,14 @@ Swire Coca-Cola operates multiple delivery truck types (Red Truck and White Truc
 
 ## Key Contributions
 This repository includes:
-- 📊 **EDA Notebook** – Exploratory data analysis and feature creation
-- 🔍 **Modeling Notebook** – Regression modeling and evaluation
-- 📈 **Tableau Dashboard** – Interactive dashboard for routing decisions
-- 🎯 **Final Presentation** – Summary of findings and recommendations
+- [**Business Problem Statement**](./BusinessProblemStatement_MadelineLee.docx): Defines the business challenge, project objectives, and analytics goals as submitted to the sponsor and course faculty.
+- [**EDA Notebook (RMarkdown)**](./LEE_M_SWIRE_EDA.Rmd): Contains data exploration, feature engineering, and insights used to inform modeling decisions.
+- [**EDA Summary PDF**](./Group%201%20EDA%20-%20Maddie%20Lee%2C%20Alexia%20Wells%2C%20Leah%20Ekblad%2C%20Whtiney%20Holt%20-%202025.02.22.pdf): Visual and narrative summary of EDA findings for stakeholder communication.
+- [**Modeling Notebook (RMarkdown)**](./LEE_MADDIE_MSBA_CAPSTONE_MODELING%20(1).Rmd): Contains predictive modeling code, VIF filtering, and regression output.
+- [**Group Modeling Report (HTML)**](./Group%201%20Modeling%20-%20Maddie%20Lee%2C%20Alexia%20Wells%2C%20Leah%20Ekblad%2C%20Whitney%20Holt%20-%202025.03.18.html): Final group modeling write-up with performance evaluation and business interpretation.
+- [**Slide Deck – Final Presentation**](./Group%201%20Slide%20Deck%20(5).pptx): Final stakeholder-facing PowerPoint summarizing methods, results, and business recommendations.
+- [**Capstone Overview Slides**](./University%20of%20Utah%20Capstone-Spring%202025%20(1).pptx): General course slide deck that outlines the structure and expectations of the Spring 2025 MSBA Capstone.
+
 
 ## Individual Contributions
 As part of Group 1, I contributed to:
