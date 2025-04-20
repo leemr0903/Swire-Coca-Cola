@@ -62,6 +62,6 @@ Overall, the project demonstrated how a thoughtful blend of descriptive, predict
 
 ## Lessons Learned
 
-This project taught me that even when the data isn’t perfect or complete, it’s still possible to deliver insights that drive meaningful business impact. Rather than waiting for ideal conditions, we focused on making the most of what was available — and were able to create tools and recommendations that improved Swire’s current processes. I also learned the value of working with a team from diverse backgrounds; different skill sets and perspectives helped us create a more well-rounded and thoughtful solution.
+This project taught me that even when the data isn’t perfect or complete, it’s still possible to deliver insights that drive meaningful business impact. Rather than waiting for ideal conditions, we focused on making the most of what was available and were able to create tools and recommendations that improved Swire’s current processes. I also learned the value of working with a team from diverse backgrounds; different skill sets and perspectives helped us create a more well-rounded and thoughtful solution.
 
 
