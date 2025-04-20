@@ -45,7 +45,19 @@ As part of Group 1, I contributed to:
 - **Data Limitations:** Lack of order-level granularity and ZIP codes restricted segmentation accuracy.
 
 ## Business Impact
-- Delivered data-driven routing recommendations that reduce delivery costs and preserve growth potential.
-- Created scalable workflows and dashboards for Swire to use in future quarters.
-- Provided strategic insights to identify at-risk or misclassified accounts and adjust delivery methods accordingly.
+
+This project provided Swire Coca-Cola with a scalable, analytics-driven approach to improving delivery efficiency while maintaining long-term customer value. Specifically:
+
+- **Data-Driven Delivery Routing:** Our regression model and dashboard enabled Swire to identify which customers could be transitioned from high-touch Red Truck delivery to cost-effective White Truck routes—without jeopardizing future sales. This allows Swire to save on operational costs while preserving service levels for high-potential accounts.
+
+- **Identification of Growth Opportunities:** By segmenting customers into groups such as “Growth Ready” and “At-Risk Misclassified,” we highlighted accounts that may be undervalued using current routing logic. Swire can now proactively support these accounts through field rep engagement or hybrid service models before potential churn occurs.
+
+- **Visual Decision Support:** The interactive Tableau dashboard gives stakeholders real-time visibility into delivery classification, customer trends, and regression-backed volume forecasts. This tool improves collaboration between analytics teams, operations, and sales representatives.
+
+- **Foundations for Forecasting and Automation:** While this project focused on regression modeling, the structure supports future expansion into time series forecasting, machine learning classification, and automated routing recommendations based on projected volume.
+
+- **Strategic Alignment with Efficiency Goals:** The insights and recommendations directly support Swire’s strategic initiative to reduce delivery costs while maximizing customer lifetime value. The tools and models developed can be applied to future customer cohorts and refined with additional data for even greater precision.
+
+Overall, the project demonstrated how a thoughtful blend of descriptive, predictive, and prescriptive analytics can drive operational change, reduce costs, and improve decision-making across business units.
+.
 
