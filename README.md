@@ -59,5 +59,9 @@ This project provided Swire Coca-Cola with a scalable, analytics-driven approach
 - **Strategic Alignment with Efficiency Goals:** The insights and recommendations directly support Swire’s strategic initiative to reduce delivery costs while maximizing customer lifetime value. The tools and models developed can be applied to future customer cohorts and refined with additional data for even greater precision.
 
 Overall, the project demonstrated how a thoughtful blend of descriptive, predictive, and prescriptive analytics can drive operational change, reduce costs, and improve decision-making across business units.
-.
+
+## Lessons Learned
+
+This project taught me that even when the data isn’t perfect or complete, it’s still possible to deliver insights that drive meaningful business impact. Rather than waiting for ideal conditions, we focused on making the most of what was available — and were able to create tools and recommendations that improved Swire’s current processes. I also learned the value of working with a team from diverse backgrounds; different skill sets and perspectives helped us create a more well-rounded and thoughtful solution.
+
 
