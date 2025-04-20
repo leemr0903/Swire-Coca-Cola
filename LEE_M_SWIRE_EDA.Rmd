@@ -1,0 +1,190 @@
+---
+title: "Swire EDA"
+author: "Maddie Lee"
+date: "2025-02-10"
+output: html_document
+---
+# Business Statement
+
+
+# Exploration Tasks
+```{r, message=FALSE, warning = FALSE}
+# Load libraries
+library(tidyverse)
+library(readr) 
+library(readxl)
+library(dplyr)
+library(DataExplorer) 
+library(ggplot2)
+library(caret)
+library(skimr)
+library(tidymodels)
+library(patchwork)
+library(missForest)
+library(kableExtra)
+library(ROSE)
+library(car)
+library(ggcorrplot)
+```
+
+## Cleaning the Data
+
+### How Does the Initial Data Look?
+```{r read data}
+
+# Read CSV files
+customer_profile <- read_csv("~/Downloads/customer_profile.csv")
+customer_address <- read_csv("~/Downloads/customer_address_and_zip_mapping.csv")
+transactional_data <- read_csv("~/Downloads/transactional_data.csv")
+
+# Read Excel file
+delivery_cost_data <- read_excel("~/Downloads/delivery_cost_data.xlsx")
+```
+
+```{r view data}
+head(customer_profile)
+head(customer_address)
+head(transactional_data)
+head(delivery_cost_data)
+```
+
+Consider splitting customer address into city or state?
+
+```{r chr to factor}
+# Check for duplicated data
+anyDuplicated(customer_profile)
+anyDuplicated(customer_address)
+anyDuplicated(transactional_data)
+anyDuplicated(delivery_cost_data)
+
+# Check data type of variables
+str(customer_profile)
+str(customer_address)
+str(transactional_data)
+str(delivery_cost_data)
+
+# Convert 
+convert_to_factor <- function(df) {
+  df[] <- lapply(df, function(x) if (is.character(x)) as.factor(x) else x)
+  return(df)
+}
+
+# Apply the function to all datasets
+customer_address <- convert_to_factor(customer_address)
+customer_profile <- convert_to_factor(customer_profile)
+transactional_data <- convert_to_factor(transactional_data)
+delivery_cost_data <- convert_to_factor(delivery_cost_data)
+
+# Convert zipcode, customer number, primary group number, week, and year to factor
+
+# Function to convert specific columns to factors
+convert_to_factor <- function(df, columns) {
+  df <- df %>%
+    mutate(across(all_of(columns), as.factor))
+  return(df)
+}
+
+# Convert in customer profile
+customer_profile <- convert_to_factor(customer_profile, c("ZIP_CODE", "CUSTOMER_NUMBER", "PRIMARY_GROUP_NUMBER"))
+
+# Convert in transactional data
+transactional_data <- convert_to_factor(transactional_data, c("CUSTOMER_NUMBER",  "WEEK", "YEAR"))
+
+# Convert in customer address dataset 
+customer_address <- convert_to_factor(customer_address, c("zip"))
+
+
+# Verify conversion
+str(customer_address)
+str(customer_profile)
+str(transactional_data)
+str(delivery_cost_data)
+```
+
+```{r numeric variable distributions}
+# Function to plot numeric variable distributions
+plot_numeric_distributions <- function(df, dataset_name) {
+  numeric_cols <- df %>% select(where(is.numeric)) %>% names()
+  
+  if (length(numeric_cols) > 0) {
+    for (col in numeric_cols) {
+      p <- ggplot(df, aes(x = .data[[col]])) +
+        geom_histogram(bins = 30, fill = "steelblue", color = "black", alpha = 0.7) +
+        geom_density(aes(y = ..count..), color = "red", size = 1) +
+        labs(title = paste("Distribution of", col, "in", dataset_name),
+             x = col,
+             y = "Frequency") +
+        theme_minimal()
+      
+      print(p)  # Display plot
+    }
+  } else {
+    cat("\nNo numeric variables found in", dataset_name, "\n")
+  }
+}
+
+# Generate distribution plots for each dataset
+plot_numeric_distributions(customer_address, "Customer Address and ZIP Mapping")
+plot_numeric_distributions(customer_profile, "Customer Profile")
+plot_numeric_distributions(transactional_data, "Transactional Data")
+plot_numeric_distributions(delivery_cost_data, "Delivery Cost Data")
+
+summary(transactional_data$DELIVERED_CASES)
+summary(transactional_data$DELIVERED_GALLONS)
+summary(transactional_data$ORDERED_CASES)
+summary(transactional_data$ORDERED_GALLONS)
+summary(transactional_data$LOADED_CASES)
+summary(transactional_data$LOADED_GALLONS)
+```
+Negative values of delivered_gallons and delivered cases?
+
+Different values of ordered, delivered, and loaded in cases and gallons
+
+
+### Are there Columns with Near-Zero Variance?
+
+```{r near zero variance}
+# View variables that are near zero variance 
+nearZeroVar(customer_profile,saveMetrics = TRUE)
+nearZeroVar(customer_profile)
+# View variables that are near zero variance 
+nearZeroVar(transactional_data,saveMetrics = TRUE)
+nearZeroVar(transactional_data)
+# View variables that are near zero variance 
+nearZeroVar(delivery_cost_data,saveMetrics = TRUE)
+nearZeroVar(delivery_cost_data)
+```
+No columns appear to have near zero variance 
+
+
+### What is the scope of missing data?
+
+```{r missing data}
+# Function to check missing values per column
+check_missing_values <- function(df, df_name) {
+  missing_counts <- colSums(is.na(df))
+  missing_percent <- round((missing_counts / nrow(df)) * 100, 2)
+  missing_df <- data.frame(Column = names(df), Missing_Count = missing_counts, Missing_Percent = missing_percent)
+  
+  # Print missing values summary
+  cat("\nMissing Values Summary for", df_name, "\n")
+  print(missing_df %>% arrange(desc(Missing_Count)))  # Sort by most missing values
+  
+  return(missing_df)
+}
+
+# Apply function to all datasets
+missing_customer_profile <- check_missing_values(customer_profile, "customer_profile")
+missing_customer_address <- check_missing_values(customer_address, "customer_address")
+missing_transactional_data <- check_missing_values(transactional_data, "transactional_data")
+missing_delivery_cost <- check_missing_values(delivery_cost_data, "delivery_cost_data")
+
+```
+
+
+Largest missing values in Primary Group Number (almost 60%)
+
+
+## Feature Engineering 
+
+## Target Variable

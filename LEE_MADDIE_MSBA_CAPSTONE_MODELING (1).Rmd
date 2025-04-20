@@ -1,0 +1,800 @@
+---
+title: "MSBA Captstone -Modeling"
+author: "Maddie Lee"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+execute:
+  warning: false
+  message: false
+---
+```{r include=FALSE, echo = FALSE, warnings = FALSE, message = FALSE}
+library(MASS)
+library(tidyverse)
+library(knitr)
+library(readxl)
+library(Metrics)
+library(car)
+library(caret)
+library(glmnet)
+library(forecast)
+library(prophet)
+library(randomForest)
+library(ggplot2)
+library(caret)
+library(tidymodels)
+library(xgboost)
+library(timetk)
+```
+
+# Introduction
+
+## Business Problem Statement
+
+Swire Coca-Cola (SCCU) aims to optimize delivery logistics by shifting low-volume customers to cost-efficient Alternate Routes to Market (ARTM/ white
+truck delivery) using third-party services. However, this may inadvertently move high-growth potential customers to less personalized service, risking
+revenue loss and weaker relationships. The purpose of this project is to establish a reliable, data-informed systematic method to identify and predict
+high-potential customers, balancing efficiency with sustainable growth.
+
+## Discussion of Modeling
+
+A supervised machine learning model will be used to predict total annual delivery cost per customer. By leveraging historical sales and delivery data, it will help identify ARTM customers with potential for volume growth, ensuring cost-efficient truck assignments and forecasting high-cost customers before they exceed thresholds. The model is trained using one year of data as the training set and the next year as the test set, with key features such as order volume, delivery success rate, and trade channel. Performance will be evaluated based on key metrics such as RMSE, R², and MAPE to evaluate the model's accuracy. 
+
+Once the calculations and predictions are complete, unsupervised learning (clustering) can be used to segment deliveries into White Truck vs. Red Truck categories based on key logistics variables. 
+
+A dashboard will then be constructed to illustrate results. The goal of this dashboard is to help logistics teams and operations managers classify deliveries into White Truck vs. Red Truck based on key order attributes. By integrating clustering techniques, this dashboard will automate truck assignments, reduce delivery costs, and improve operational efficiency. Ultimately, the desire is to determine how to integrate the insights into a routine strategy to support long-term growth while maintaining logistical efficiency.  
+
+# Modeling
+
+## Preprocessing
+
+### Loading & Joining Data
+
+Loading in data sets:
+
+```{r}
+# Import data sets
+setwd("/Users/madelinelee/Downloads/")
+transactional_data <- read.csv(file = "transactional_data.csv", stringsAsFactors = TRUE)
+customer_profile <- read.csv(file = "customer_profile.csv", stringsAsFactors = TRUE)
+customer_address_and_zip_mapping <- read.csv(file = "customer_address_and_zip_mapping.csv", stringsAsFactors = TRUE)
+delivery_cost_data <- read_excel("delivery_cost_data.xlsx")
+```
+
+Combining transaction and customer data into one data set:
+
+```{r}
+# Join transactional and customer profile data
+transaction_customer_data <- transactional_data %>%
+                             left_join(customer_profile, by = c("CUSTOMER_NUMBER" = "CUSTOMER_NUMBER"))
+
+# Join customer address data
+transaction_customer_data <- transaction_customer_data %>%
+                             left_join(customer_address_and_zip_mapping, by = c("ZIP_CODE" = "zip"))
+```
+
+### Feature Engineering from the EDA
+
+Creating new variables from Exploratory Data Analysis (EDA):
+
+**Total Units Ordered**
+
+ - Description: used to quantify total units ordered, which are then used to determine when a threshold is reached
+ - Calculation: sum of two existing variables
+
+```{r}
+# Total Units Ordered
+transaction_customer_data$TOTAL_UNITS_ORDERED <- transaction_customer_data$ORDERED_GALLONS + transaction_customer_data$ORDERED_CASES
+```
+
+**Total Units Loaded**
+
+ - Description: used to quantify total units loaded
+ - Calculation: sum of two existing variables
+
+```{r}
+# Total Units Loaded
+transaction_customer_data$TOTAL_UNITS_LOADED <- transaction_customer_data$LOADED_GALLONS + transaction_customer_data$LOADED_CASES
+```
+
+**Total Units Delivered**
+
+ - Description: used to quantify total units delivered
+ - Calculation: sum of two existing variables
+
+```{r}
+# Total Units Loaded
+transaction_customer_data$TOTAL_UNITS_DELIVERED <- transaction_customer_data$DELIVERED_GALLONS + transaction_customer_data$DELIVERED_CASES
+```
+
+**Order Grouping**
+
+ - Description: used to identify customers who are ordering less or more than 400 units per year
+ - Calculation: logical statement utilizing level of detail (LOD) calculation functionality
+
+```{r}
+transaction_customer_data$ORDER_GROUPING <- (transaction_customer_data %>%
+                                            group_by(YEAR, CUSTOMER_NUMBER) %>%
+                                            mutate(TOTAL_UNITS_ORDERED = sum(TOTAL_UNITS_ORDERED)) %>%
+                                            ungroup() %>%
+                                            mutate(ORDER_GROUPING = as.factor(ifelse(TOTAL_UNITS_ORDERED < 400, 
+                                                                                                'Customers Ordering Less than 400', 
+                                                                                                'Customers Ordering More than 400'))))$ORDER_GROUPING
+```
+
+**Customer Group Number (Rollup)**
+
+- Description: used to aggregate transactions up to the customer group number, if desired
+- Calculation: logical statement using two existing variables
+
+```{r}
+transaction_customer_data$CUSTOMER_GROUP_NUMBER_ROLLUP <- ifelse(!is.na(transaction_customer_data$PRIMARY_GROUP_NUMBER), 
+                                                                 transaction_customer_data$PRIMARY_GROUP_NUMBER, 
+                                                                 transaction_customer_data$CUSTOMER_NUMBER)
+```
+
+### New Feature Engineering: Calculating Delivery Cost per Customer
+
+Steps provided by SWIRE:
+
+ 1. Determine the volume range for each category (Fountain and Bottles/ Cans)
+ 2. Retrieve the median delivery cost per unit from the data set.
+ 3. Multiply the cost per unit by the quantity purchased for each category.
+ 4. Sum the delivery costs to get the total.
+ 
+We'll start by calculating the total volume purchased by each customer in each category per year. 
+
+```{r}
+# Summarize the total volume purchased for each category
+annual_volume <- transaction_customer_data %>%
+  group_by(YEAR, CUSTOMER_NUMBER, COLD_DRINK_CHANNEL) %>%
+  summarize(
+    Total_Fountain = sum(ORDERED_GALLONS),
+    Total_Bottles_Cans = sum(ORDERED_CASES)
+  ) %>%
+  ungroup()
+
+# View the result
+head(annual_volume, n = 5)
+tail(annual_volume, n = 5)
+```
+
+Next, we need to determine the range each fountain and bottle/ can value falls into, writing a function to do so.
+
+```{r}
+# Ensure Vol Range is a character
+delivery_costs <- delivery_cost_data %>%
+  mutate(`Vol Range` = as.character(`Vol Range`))
+
+# Function to get the delivery cost based on volume range
+get_delivery_cost <- function(volume, category, channel) {
+  if (volume >= 0 & volume <= 149) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "0 - 149") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 150 & volume <= 299) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "150 - 299") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 300 & volume <= 449) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "300 - 449") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 450 & volume <= 599) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "450 - 599") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 600 & volume <= 749) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "600 - 749") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 750 & volume <= 899) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "750 - 899") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 900 & volume <= 1049) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "900 - 1049") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 1050 & volume <= 1199) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "1050 - 1199") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 1200 & volume <= 1349) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "1200 - 1349") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else if (volume >= 1350) {
+    cost <- delivery_costs %>%
+      filter(`Cold Drink Channel` == channel, `Applicable To` == category, `Vol Range` == "1350+") %>%
+      select(`Median Delivery Cost`) %>%
+      pull()
+  } else {
+    cost <- 0
+  }
+  return(ifelse(length(cost) > 0, cost, 0))
+}
+```
+
+Next, we'll calculate the total delivery cost for each customer.
+
+```{r}
+# Calculate the total delivery cost for each customer
+annual_volume <- annual_volume %>%
+  rowwise() %>%
+  mutate(
+    Fountain_Cost = get_delivery_cost(Total_Fountain, "Fountain", COLD_DRINK_CHANNEL) * Total_Fountain,
+    Bottles_Cans_Cost = get_delivery_cost(Total_Bottles_Cans, "Bottles and Cans", COLD_DRINK_CHANNEL) * Total_Bottles_Cans,
+    Total_Delivery_Cost = Fountain_Cost + Bottles_Cans_Cost
+  ) %>%
+  ungroup()
+
+
+```
+
+Last, we'll add the total delivery cost column to our main data set.
+
+```{r}
+# Merge the total delivery cost back into the transaction_customer_data table
+transaction_customer_data <- transaction_customer_data %>%
+  left_join(annual_volume %>% select(CUSTOMER_NUMBER, YEAR, Total_Delivery_Cost), 
+            by = c("CUSTOMER_NUMBER" = "CUSTOMER_NUMBER", "YEAR" = "YEAR"))
+
+# View the result
+head(transaction_customer_data, n = 5)
+tail(transaction_customer_data, n = 5)
+```
+
+## Defining Train & Test Sets
+
+Because some customers have data in just 2023 or 2024, we want to make sure we split those customers into train and test sets proportionately.
+
+The plan is to:
+
+ - Identify customers with data in 2023, 2024, both years, and only one of the years.
+ - Split the customers into train and test sets based on the specified proportions.
+ - Create the train and test sets using the transaction_customer_data table.
+ 
+```{r}
+# Identify customers with data in 2023 and 2024
+customers_2023 <- transaction_customer_data %>%
+  filter(YEAR == 2023) %>%
+  select(CUSTOMER_NUMBER) %>%
+  distinct()
+
+customers_2024 <- transaction_customer_data %>%
+  filter(YEAR == 2024) %>%
+  select(CUSTOMER_NUMBER) %>%
+  distinct()
+
+# Identify customers with data in both years, only 2023, and only 2024
+customers_both_years <- intersect(customers_2023$CUSTOMER_NUMBER, customers_2024$CUSTOMER_NUMBER)
+customers_only_2023 <- setdiff(customers_2023$CUSTOMER_NUMBER, customers_2024$CUSTOMER_NUMBER)
+customers_only_2024 <- setdiff(customers_2024$CUSTOMER_NUMBER, customers_2023$CUSTOMER_NUMBER)
+
+# Function to split customers into train and test sets
+split_customers <- function(customers, train_ratio = 0.7) {
+  set.seed(123) # For reproducibility
+  train_indices <- sample(seq_len(length(customers)), size = floor(train_ratio * length(customers)))
+  train_customers <- customers[train_indices]
+  test_customers <- customers[-train_indices]
+  return(list(train = train_customers, test = test_customers))
+}
+
+# Split customers into train and test sets
+split_both_years <- split_customers(customers_both_years)
+split_only_2023 <- split_customers(customers_only_2023)
+split_only_2024 <- split_customers(customers_only_2024)
+
+# Combine train and test customers
+train_customers <- c(split_both_years$train, split_only_2023$train, split_only_2024$train)
+test_customers <- c(split_both_years$test, split_only_2023$test, split_only_2024$test)
+
+# Create train and test sets
+train_set <- transaction_customer_data %>%
+  filter(CUSTOMER_NUMBER %in% train_customers)
+
+test_set <- transaction_customer_data %>%
+  filter(CUSTOMER_NUMBER %in% test_customers)
+
+# View the results
+print("Train Set:")
+head(train_set, n = 5)
+tail(train_set, n = 5)
+print("Test Set:")
+head(test_set, n = 5)
+tail(test_set, n = 5)
+```
+
+Let's test to make sure each customer (and all of their transactions) end up in either the train set or the test set, and aren't split among the two:
+
+```{r}
+# Check for overlap
+overlap_customers <- intersect(train_customers, test_customers)
+if (length(overlap_customers) == 0) {
+  print("No overlap between train and test customers.")
+} else {
+  print("Overlap found between train and test customers.")
+}
+```
+
+These sets are still quite large let's aggregate each row up to the customer and year level so there is one row per customer per year. This will decrease the time required to create and test the models.
+
+```{r}
+# Assigning columns a group
+dimensions <- c("ORDER_TYPE", 
+                "PRIMARY_GROUP_NUMBER",
+                "FREQUENT_ORDER_TYPE",
+                "FIRST_DELIVERY_DATE",
+                "ON_BOARDING_DATE",
+                "COLD_DRINK_CHANNEL",
+                "TRADE_CHANNEL",
+                "SUB_TRADE_CHANNEL",
+                "LOCAL_MARKET_PARTNER",
+                "CO2_CUSTOMER",
+                "ZIP_CODE",
+                "full.address",
+                "ORDER_GROUPING",
+                "CUSTOMER_GROUP_NUMBER_ROLLUP")
+
+measures <- c("ORDERED_CASES", 
+              "LOADED_CASES", 
+              "DELIVERED_CASES",
+              "ORDERED_GALLONS",
+              "LOADED_GALLONS",
+              "DELIVERED_GALLONS",
+              "TOTAL_UNITS_ORDERED",
+              "TOTAL_UNITS_LOADED",
+              "TOTAL_UNITS_DELIVERED") 
+
+drop_columns <- c("WEEK", 
+                  "TRANSACTION_DATE") 
+
+already_aggregated <- "Total_Delivery_Cost" 
+
+# Aggregate the data
+aggregated_data <- transaction_customer_data %>%
+  select(-one_of(drop_columns)) %>% # Drop unnecessary columns
+  group_by(CUSTOMER_NUMBER, YEAR) %>%
+  summarize(across(all_of(dimensions), first), # Keep dimensions as-is
+            across(all_of(measures), sum, .names = "sum_{col}"), # Sum measures
+            across(all_of(already_aggregated), first)) # Keep already aggregated column as-is
+
+# View the results
+print("Aggregated Data:")
+head(aggregated_data, n = 5)
+tail(aggregated_data, n = 5)
+
+# Aggregate the train set
+aggregated_train_set <- train_set %>%
+  select(-one_of(drop_columns)) %>% # Drop unnecessary columns
+  group_by(CUSTOMER_NUMBER, YEAR) %>%
+  summarize(across(all_of(dimensions), first), # Keep dimensions as-is
+            across(all_of(measures), sum, .names = "sum_{col}"), # Sum measures
+            across(all_of(already_aggregated), first)) # Keep already aggregated column as-is
+
+# Aggregate the test set
+aggregated_test_set <- test_set %>%
+  select(-one_of(drop_columns)) %>% # Drop unnecessary columns
+  group_by(CUSTOMER_NUMBER, YEAR) %>%
+  summarize(across(all_of(dimensions), first), # Keep dimensions as-is
+            across(all_of(measures), sum, .names = "sum_{col}"), # Sum measures
+            across(all_of(already_aggregated), first)) # Keep already aggregated column as-is
+
+# View the results
+print("Aggregated Train Set:")
+head(aggregated_train_set, n = 5)
+tail(aggregated_train_set, n = 5)
+
+print("Aggregated Test Set:")
+head(aggregated_test_set, n = 5)
+tail(aggregated_test_set, n = 5)
+```
+
+Lastly, I want to make sure that I am using 2023 data to predict Total Units ordered in 2024.
+
+```{r}
+# Separate the data into 2023 and 2024 subsets
+train_data_2023 <- aggregated_train_set %>% filter(YEAR == 2023)
+train_data_2024 <- aggregated_train_set %>% filter(YEAR == 2024)
+test_data_2023 <- aggregated_test_set %>% filter(YEAR == 2023)
+test_data_2024 <- aggregated_test_set %>% filter(YEAR == 2024)
+
+# Merge the 2023 and 2024 data based on customer number
+train_merged_data <- merge(train_data_2023, train_data_2024, by = "CUSTOMER_NUMBER", suffixes = c("_2023", "_2024"))
+test_merged_data <- merge(test_data_2023, test_data_2024, by = "CUSTOMER_NUMBER", suffixes = c("_2023", "_2024"))
+
+# Select relevant
+train_set <- train_merged_data %>% select(CUSTOMER_NUMBER, ends_with("_2023"), sum_TOTAL_UNITS_ORDERED_2024)
+test_set <- test_merged_data %>% select(CUSTOMER_NUMBER, ends_with("_2023"), sum_TOTAL_UNITS_ORDERED_2024)
+```
+
+# Modeling
+
+```{r modeling}
+options(warn=-1) 
+# Define predictors and target variable
+predictor_vars <- grep("_2023$", colnames(train_set), value = TRUE)
+target_var <- "sum_TOTAL_UNITS_ORDERED_2024"
+
+# Remove rows with missing values
+train_set <- train_set %>% drop_na(all_of(c(predictor_vars, target_var)))
+test_set <- test_set %>% drop_na(all_of(predictor_vars))
+
+# Impute missing values (if needed)
+train_set[predictor_vars] <- train_set[predictor_vars] %>% mutate_all(~ ifelse(is.na(.), median(., na.rm = TRUE), .))
+test_set[predictor_vars] <- test_set[predictor_vars] %>% mutate_all(~ ifelse(is.na(.), median(., na.rm = TRUE), .))
+
+# Define cross-validation setup
+train_control <- trainControl(method = "cv", number = 5)
+
+# Train models (Fix: Keep y in train_set)
+models <- list()
+
+models$lm <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "lm",
+  trControl = train_control
+)
+
+models$ridge <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "glmnet",
+  trControl = train_control,
+  tuneGrid = expand.grid(alpha = 0, lambda = seq(0.001, 1, length = 10))
+)
+
+models$lasso <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "glmnet",
+  trControl = train_control,
+  tuneGrid = expand.grid(alpha = 1, lambda = seq(0.001, 1, length = 10))
+)
+
+models$rf <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "rf",
+  trControl = train_control,
+  tuneGrid = expand.grid(mtry = c(2, 5, 10))
+)
+
+xgb_grid <- expand.grid(
+  nrounds = c(50, 100, 200), eta = c(0.01, 0.1, 0.3),
+  max_depth = c(3, 6, 9), gamma = 0, colsample_bytree = 0.8,
+  min_child_weight = 1, subsample = 0.8
+)
+
+models$xgb <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "xgbTree",
+  trControl = train_control,
+  tuneGrid = xgb_grid
+)
+
+# Elastic Net Regression (combines Ridge & Lasso)
+enet_grid <- expand.grid(alpha = seq(0, 1, 0.1), lambda = seq(0.001, 1, length = 10))
+models$enet <- train(as.formula(paste(target_var, "~ .")), data = train_set, method = "glmnet", 
+                     trControl = train_control, tuneGrid = enet_grid)
+
+# Decision Tree Model
+models$dt <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "rpart",
+  trControl = train_control,
+  tuneGrid = expand.grid(cp = seq(0.001, 0.1, by = 0.01))
+)
+
+# Gradient Boosting Machine (GBM)
+models$gbm <- train(
+  as.formula(paste(target_var, "~ .")),
+  data = train_set,
+  method = "gbm",
+  trControl = train_control,
+  verbose = FALSE
+)
+
+
+# Function to calculate MAPE
+mape <- function(actual, predicted) {
+  mean(abs((actual - predicted) / actual), na.rm = TRUE) * 100
+}
+
+# Function to safely calculate MAPE
+mape <- function(actual, predicted) {
+  valid_indices <- actual != 0  # Ignore zero values in y_test
+  if (sum(valid_indices) == 0) {
+    return(NA)  # If all values are zero, return NA instead of Inf
+  }
+  mean(abs((actual[valid_indices] - predicted[valid_indices]) / actual[valid_indices]), na.rm = TRUE) * 100
+}
+
+y_test <- test_set[[target_var]]
+
+# Initialize results dataframe
+results <- data.frame(Model = character(), RMSE = numeric(), R2 = numeric(), MAPE = numeric())
+
+# Evaluate each model
+for (model_name in names(models)) {   
+  pred <- predict(models[[model_name]], newdata = test_set)
+  
+  rmse <- RMSE(pred, y_test)
+  r2 <- R2(pred, y_test)
+  mape_value <- mape(y_test, pred)  # Fixed MAPE function
+
+  # If MAPE is Inf or NA, replace with a message
+  if (is.infinite(mape_value) | is.na(mape_value)) {
+    mape_value <- NA
+  }
+  
+  # Append results
+  results <- rbind(results, data.frame(Model = model_name, RMSE = rmse, R2 = r2, MAPE = mape_value))
+  
+  # Print performance metrics for each model
+  cat("\n", model_name, "Model Performance:\n")
+  cat("RMSE:", rmse, "\n")
+  cat("R-squared:", r2, "\n")
+  if (!is.na(mape_value)) {
+    cat("MAPE:", mape_value, "%\n")
+  } else {
+    cat("MAPE: NA (due to zero values in y_test)\n")
+  }
+}
+
+# Print overall model performance table
+print(results)
+
+```
+## Feature Importance & AIC-based Model Selection
+```{r}
+# Feature Importance using caret
+importance <- varImp(models$lm, scale = FALSE)
+print(importance)
+plot(importance)
+
+# Train a standard linear regression model outside of caret
+lm_model <- lm(as.formula(paste(target_var, "~ .")), data = train_set)
+
+# Apply stepwise AIC selection
+stepwise_model <- stepAIC(lm_model, direction = "both")
+
+# Display results
+summary(stepwise_model)
+
+# Calculate VIF on the final model after stepwise selection
+vif_values <- vif(stepwise_model)
+print(vif_values)
+
+# Remove features with VIF > 5 (indicating high multicollinearity)
+high_vif_vars <- names(vif_values[vif_values > 5])
+```
+# Time Series Attempts
+
+```{r redo data}
+# Import datasets
+setwd("/Users/madelinelee/Downloads/")
+
+transactional_data <- read.csv("transactional_data.csv", stringsAsFactors = FALSE)
+customer_profile <- read.csv("customer_profile.csv", stringsAsFactors = FALSE)
+customer_address_and_zip_mapping <- read.csv("customer_address_and_zip_mapping.csv", stringsAsFactors = FALSE)
+delivery_cost_data <- readxl::read_excel("delivery_cost_data.xlsx")
+
+# Join transactional and customer profile data
+transaction_customer_data <- transactional_data %>%
+                             left_join(customer_profile, by = c("CUSTOMER_NUMBER" = "CUSTOMER_NUMBER"))
+
+# Join customer address data
+transaction_customer_data <- transaction_customer_data %>%
+                             left_join(customer_address_and_zip_mapping, by = c("ZIP_CODE" = "zip"))
+
+# Convert TRANSACTION_DATE to Date format
+transaction_customer_data$TRANSACTION_DATE <- as.character(transaction_customer_data$TRANSACTION_DATE)
+transaction_customer_data$Date <- as.Date(transaction_customer_data$TRANSACTION_DATE, format = "%m/%d/%Y")
+
+# Ensure date conversion was successful
+if (sum(is.na(transaction_customer_data$Date)) > 0) {
+  warning("⚠️ WARNING: Some TRANSACTION_DATE values failed to convert.")
+}
+
+```
+
+```{r aggregate sales}
+# Aggregate daily total orders (calculated as ORDERED_CASES + ORDERED_GALLONS)
+daily_orders <- transaction_customer_data %>%
+  group_by(Date) %>%
+  summarise(
+    Total_Orders = sum(ORDERED_CASES, na.rm = TRUE) + sum(ORDERED_GALLONS, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Date)
+
+# Fill missing dates with 0 orders
+daily_orders <- daily_orders %>%
+  complete(Date = seq(min(Date), max(Date), by = "day"), fill = list(Total_Orders = 0))
+
+# Split into train and test sets (80% train, 20% test)
+split_point <- floor(0.8 * nrow(daily_orders))
+train_ts <- daily_orders[1:split_point, ]
+test_ts <- daily_orders[(split_point + 1):nrow(daily_orders), ]
+
+```
+
+
+## Train Models
+
+### ARIMA
+```{r auto ARIMA}
+# Train ARIMA model
+arima_model <- auto.arima(train_ts$Total_Orders, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+
+# Forecast
+arima_preds <- forecast(arima_model, h = nrow(test_ts))$mean
+```
+
+### ETS
+
+```{r ETS}
+# Train ETS model
+ets_model <- ets(train_ts$Total_Orders)
+
+# Forecast
+ets_preds <- forecast(ets_model, h = nrow(test_ts))$mean
+```
+
+
+### Prophet
+```{r prophet}
+# Prepare Prophet data
+prophet_data <- train_ts %>%
+  rename(ds = Date, y = Total_Orders)
+
+# Train Prophet model
+prophet_model <- prophet(prophet_data)
+
+# Create future dates
+future_dates <- make_future_dataframe(prophet_model, periods = nrow(test_ts), freq = "day")
+
+# Predict
+prophet_forecast <- predict(prophet_model, future_dates)
+prophet_preds <- tail(prophet_forecast$yhat, nrow(test_ts))
+
+```
+
+### XGBoost - Time Series
+
+```{r xgboost}
+
+# Feature Engineering
+train_ts <- train_ts %>%
+  tk_augment_timeseries_signature() %>%
+  select(-diff, -year.iso, -month.lbl)
+
+test_ts <- test_ts %>%
+  tk_augment_timeseries_signature() %>%
+  select(-diff, -year.iso, -month.lbl)
+
+# Convert character/factor columns to numeric (one-hot encoding if needed)
+train_ts <- train_ts %>%
+  mutate(across(where(is.character), as.numeric, .names = "num_{col}")) %>%  # Convert characters
+  mutate(across(where(is.factor), as.numeric))  # Convert factors
+
+test_ts <- test_ts %>%
+  mutate(across(where(is.character), as.numeric, .names = "num_{col}")) %>%  
+  mutate(across(where(is.factor), as.numeric))
+
+
+
+# Verify no character columns remain
+str(train_ts)
+
+train_ts[is.na(train_ts)] <- 0
+test_ts[is.na(test_ts)] <- 0
+
+# Convert train and test data to matrices
+train_matrix <- as.matrix(train_ts %>% select(-Date, -Total_Orders))
+test_matrix <- as.matrix(test_ts %>% select(-Date, -Total_Orders))
+
+# Ensure data is numeric
+if (!is.numeric(train_matrix)) stop("❌ ERROR: Train matrix contains non-numeric values!")
+
+# Create XGBoost DMatrix
+dtrain <- xgb.DMatrix(data = train_matrix, label = train_ts$Total_Orders)
+dtest  <- xgb.DMatrix(data = test_matrix, label = test_ts$Total_Orders)
+
+
+
+# Convert to XGBoost format
+dtrain <- xgb.DMatrix(data = as.matrix(train_ts %>% select(-Date, -Total_Orders)), label = train_ts$Total_Orders)
+dtest  <- xgb.DMatrix(data = as.matrix(test_ts %>% select(-Date, -Total_Orders)), label = test_ts$Total_Orders)
+
+# Define XGBoost hyperparameter grid
+best_xgb_model <- suppressWarnings(
+  train(
+    x = as.matrix(train_ts %>% select(-Date, -Total_Orders)),
+    y = train_ts$Total_Orders,
+    method = "xgbTree",
+    tuneGrid = xgb_grid,
+    trControl = trainControl(method = "cv", number = 5)
+  )
+)
+
+# Train XGBoost model with tuning
+best_xgb_model <- train(
+  x = as.matrix(train_ts %>% select(-Date, -Total_Orders)),
+  y = train_ts$Total_Orders,
+  method = "xgbTree",
+  tuneGrid = xgb_grid,
+  trControl = trainControl(method = "cv", number = 5)
+)
+
+# Predict using XGBoost
+xgb_preds <- predict(best_xgb_model, newdata = test_ts)
+
+```
+
+```{r evaluate}
+# Function to calculate MAPE safely
+mape <- function(actual, predicted) {
+  valid_indices <- actual != 0  # Ignore zero values in y_test
+  if (sum(valid_indices) == 0) {
+    return(NA)  # If all values are zero, return NA instead of Inf
+  }
+  mean(abs((actual[valid_indices] - predicted[valid_indices]) / actual[valid_indices]), na.rm = TRUE) * 100
+}
+
+# Evaluate Models
+models_results <- data.frame(Model = character(), RMSE = numeric(), MAPE = numeric(), MAE = numeric())
+
+# ARIMA Evaluation
+models_results <- rbind(models_results, data.frame(
+  Model = "ARIMA",
+  RMSE = RMSE(arima_preds, test_ts$Total_Orders),
+  MAPE = mape(test_ts$Total_Orders, arima_preds),
+  MAE = MAE(arima_preds, test_ts$Total_Orders)
+))
+
+# ETS Evaluation
+models_results <- rbind(models_results, data.frame(
+  Model = "ETS",
+  RMSE = RMSE(ets_preds, test_ts$Total_Orders),
+  MAPE = mape(test_ts$Total_Orders, ets_preds),
+  MAE = MAE(ets_preds, test_ts$Total_Orders)
+))
+
+# Prophet Evaluation
+models_results <- rbind(models_results, data.frame(
+  Model = "Prophet",
+  RMSE = RMSE(prophet_preds, test_ts$Total_Orders),
+  MAPE = mape(test_ts$Total_Orders, prophet_preds),
+  MAE = MAE(prophet_preds, test_ts$Total_Orders)
+))
+
+# XGBoost Evaluation
+models_results <- rbind(models_results, data.frame(
+  Model = "XGBoost",
+  RMSE = RMSE(xgb_preds, test_ts$Total_Orders),
+  MAPE = mape(test_ts$Total_Orders, xgb_preds),
+  MAE = MAE(xgb_preds, test_ts$Total_Orders)
+))
+
+# Print model performance
+print(models_results)
+
+```
+
+
